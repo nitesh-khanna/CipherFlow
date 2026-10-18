@@ -1,3 +1,4 @@
+
 #ifndef VAULT_JOBS_JOB_QUEUE_HPP
 #define VAULT_JOBS_JOB_QUEUE_HPP
 
@@ -7,6 +8,7 @@
 #include "../metadata/MetadataStore.hpp"
 #include "../storage/StorageAdapter.hpp"
 
+#include <cstddef>
 #include <queue>
 
 namespace vault::jobs {
@@ -20,7 +22,10 @@ struct VaultJob {
 class JobQueue {
 public:
     void enqueue(const VaultJob& job);
-    void enqueueManifest(Action action, const manifest::VaultManifest& manifest);
+    void enqueueManifest(
+        Action action,
+        const manifest::VaultManifest& manifest
+    );
 
     bool executeAll(
         const crypto::EncryptionEngine& encryptionEngine,
@@ -28,18 +33,20 @@ public:
         storage::StorageAdapter& storageAdapter,
         metadata::MetadataStore& metadataStore,
         const manifest::VaultManifest& manifest,
-        std::string& error
+        std::string& error,
+        std::size_t workerCount = 4
     );
 
     bool empty() const;
     std::size_t size() const;
 
 private:
-    bool executeJob(
+    bool processJob(
         const VaultJob& job,
         const crypto::EncryptionEngine& encryptionEngine,
         const crypto::CryptoKey& key,
-        storage::StorageAdapter& storageAdapter,
+        const storage::StorageAdapter& storageAdapter,
+        crypto::ByteBuffer& output,
         std::string& error
     ) const;
 

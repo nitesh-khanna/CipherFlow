@@ -2,7 +2,7 @@ CXX = g++
 OPENSSL_PREFIX ?= /ucrt64
 OPENSSL_CXXFLAGS ?= -I$(OPENSSL_PREFIX)/include
 OPENSSL_LDFLAGS ?= -L$(OPENSSL_PREFIX)/lib
-CXXFLAGS = -std=c++17 -g -Wall -I. -Isrc/app $(OPENSSL_CXXFLAGS)
+CXXFLAGS = -std=c++17 -g -Wall -pthread -I. -Isrc/app $(OPENSSL_CXXFLAGS)
 LDFLAGS = $(OPENSSL_LDFLAGS)
 LDLIBS = -lcrypto
 
