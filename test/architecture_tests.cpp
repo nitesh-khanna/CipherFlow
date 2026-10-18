@@ -87,7 +87,7 @@ int main() {
     vault::jobs::JobQueue encryptQueue;
     encryptQueue.enqueueManifest(vault::Action::Encrypt, encryptManifest);
     assert(encryptQueue.size() == 3);
-    assert(encryptQueue.executeAll(engine, key, storage, metadata, encryptManifest, error));
+    assert(encryptQueue.executeAll(engine, key, storage, metadata, encryptManifest, error, 3));
     const std::string encrypted = readTextFile(sampleFile);
     assert(encrypted != original);
     assert(encrypted.size() > original.size());
@@ -105,14 +105,14 @@ int main() {
 
     vault::jobs::JobQueue decryptQueue;
     decryptQueue.enqueueManifest(vault::Action::Decrypt, decryptManifest);
-    assert(decryptQueue.executeAll(engine, key, storage, metadata, decryptManifest, error));
+    assert(decryptQueue.executeAll(engine, key, storage, metadata, decryptManifest, error, 1));
     assert(readTextFile(sampleFile) == original);
 
     assert(chunker.buildManifestForDirectory(inputDir, vault::Action::Encrypt, encryptManifest, error));
     encryptManifest.setAlgorithmId(engine.algorithmId());
     vault::jobs::JobQueue tamperEncryptQueue;
     tamperEncryptQueue.enqueueManifest(vault::Action::Encrypt, encryptManifest);
-    assert(tamperEncryptQueue.executeAll(engine, key, storage, metadata, encryptManifest, error));
+    assert(tamperEncryptQueue.executeAll(engine, key, storage, metadata, encryptManifest, error, 2));
 
     std::string tamperedFile = readTextFile(sampleFile);
     tamperedFile.back() ^= 0x01;
@@ -122,7 +122,7 @@ int main() {
 
     vault::jobs::JobQueue tamperDecryptQueue;
     tamperDecryptQueue.enqueueManifest(vault::Action::Decrypt, decryptManifest);
-    assert(!tamperDecryptQueue.executeAll(engine, key, storage, metadata, decryptManifest, error));
+    assert(!tamperDecryptQueue.executeAll(engine, key, storage, metadata, decryptManifest, error, 3));
     assert(error.find("authentication failed") != std::string::npos);
     assert(readTextFile(sampleFile) == tamperedFile);
     assert(!fs::exists(sampleFile.string() + ".sdfv.tmp"));
