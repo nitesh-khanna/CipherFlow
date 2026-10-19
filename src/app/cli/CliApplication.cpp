@@ -8,6 +8,11 @@
 #include "../storage/LocalFileStorageAdapter.hpp"
 
 #include <iostream>
+#include <exception>
+#include <string>
+#include <chrono>
+#include <iomanip>
+#include <cstdint>
 
 namespace vault::cli {
 namespace fs = std::filesystem;
@@ -53,10 +58,32 @@ int CliApplication::run(int argc, char* argv[]) {
     jobQueue.enqueueManifest(options.action, manifest);
 
     const crypto::CryptoKey key = crypto::CryptoKey::fromPassword(password.value());
-    if (!jobQueue.executeAll(encryptionEngine, key, storageAdapter, metadataStore, manifest, error)) {
+    std::uint64_t totalBytes = 0;
+
+    for (const auto& file : manifest.files()) {
+        totalBytes += file.plainSize;
+    }
+
+    const auto startTime = std::chrono::steady_clock::now();
+    if (!jobQueue.executeAll(encryptionEngine, key, storageAdapter, metadataStore, manifest, error, options.workerCount)) {
         std::cerr << "Job error: " << error << std::endl;
         return 1;
     }
+
+    const auto endTime = std::chrono::steady_clock::now();
+
+    const double elapsedSeconds =
+        std::chrono::duration<double>(endTime - startTime).count();
+
+    const double throughputMBps = elapsedSeconds > 0.0
+        ? (static_cast<double>(totalBytes) / 1'000'000.0)
+            / elapsedSeconds
+        : 0.0;
+
+    std::cout << "Worker threads: " << options.workerCount << '\n'
+            << std::fixed << std::setprecision(3)
+            << "Processing time: " << elapsedSeconds << " seconds\n"
+            << "Throughput: " << throughputMBps << " MB/s\n";
 
     std::cout << "Processed " << manifest.fileCount()
               << " file(s) across " << manifest.chunkCount()
@@ -66,36 +93,63 @@ int CliApplication::run(int argc, char* argv[]) {
     return 0;
 }
 
-bool CliApplication::parseOptions(int argc, char* argv[], CliOptions& options) const {
-    std::string actionInput;
 
-    if (argc == 1) {
-        return readInteractiveInput(options);
-    }
-
-    if (argc == 2 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
+bool CliApplication::parseOptions(
+    int argc,
+    char* argv[],
+    CliOptions& options
+) const {
+    if (argc == 2 &&
+        (std::string(argv[1]) == "-h" ||
+         std::string(argv[1]) == "--help")) {
         printUsage(argv[0]);
         return false;
     }
 
-    if (argc != 3) {
+    if (argc != 3 && argc != 5) {
         printUsage(argv[0]);
         return false;
     }
 
     options.targetPath = argv[1];
-    actionInput = argv[2];
 
-    std::optional<Action> action = parseAction(actionInput);
+    const std::string actionInput = argv[2];
+    const std::optional<Action> action = parseAction(actionInput);
+
     if (!action.has_value()) {
-        std::cerr << "Invalid action: " << actionInput << std::endl;
-        std::cerr << "Expected 'encrypt' or 'decrypt'." << std::endl;
+        std::cerr << "Invalid action: " << actionInput << '\n';
+        std::cerr << "Expected 'encrypt' or 'decrypt'.\n";
         return false;
     }
 
     options.action = action.value();
+
+    if (argc == 5) {
+        if (std::string(argv[3]) != "--workers") {
+            std::cerr << "Expected --workers followed by a number.\n";
+            return false;
+        }
+
+        try {
+            std::size_t consumed = 0;
+            const unsigned long count = std::stoul(argv[4], &consumed);
+
+            if (consumed != std::string(argv[4]).size() ||
+                count < 1 || count > 64) {
+                std::cerr << "Worker count must be between 1 and 64.\n";
+                return false;
+            }
+
+            options.workerCount = static_cast<std::size_t>(count);
+        } catch (const std::exception&) {
+            std::cerr << "Invalid worker count: " << argv[4] << '\n';
+            return false;
+        }
+    }
+
     return true;
 }
+
 
 bool CliApplication::readInteractiveInput(CliOptions& options) const {
     std::string directory;
@@ -125,9 +179,14 @@ bool CliApplication::readInteractiveInput(CliOptions& options) const {
     return true;
 }
 
+
 void CliApplication::printUsage(const char* programName) const {
-    std::cerr << "Usage: " << programName << " <directory> <encrypt|decrypt>" << std::endl;
-    std::cerr << "Or run without arguments for interactive prompts." << std::endl;
+    std::cerr
+        << "Usage: " << programName
+        << " <directory> <encrypt|decrypt> [--workers N]\n"
+        << "N must be between 1 and 64.\n"
+        << "Run without arguments for interactive prompts.\n";
 }
+
 
 } // namespace vault::cli

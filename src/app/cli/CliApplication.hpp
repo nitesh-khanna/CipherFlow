@@ -2,7 +2,7 @@
 #define VAULT_CLI_CLI_APPLICATION_HPP
 
 #include "../core/Action.hpp"
-
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -12,6 +12,7 @@ namespace vault::cli {
 struct CliOptions {
     std::filesystem::path targetPath;
     Action action = Action::Encrypt;
+    std::size_t workerCount = 4;
 };
 
 class CliApplication {
