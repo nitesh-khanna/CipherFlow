@@ -12,6 +12,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -29,6 +30,75 @@ std::string readTextFile(const fs::path& path) {
         std::istreambuf_iterator<char>()
     );
 }
+
+
+void testConcurrentRoundTrips(
+    const fs::path& workdir,
+    vault::crypto::Aes256GcmEncryptionEngine& engine,
+    const vault::crypto::CryptoKey& key
+) {
+    const std::vector<std::size_t> workerCounts = {1, 2, 4, 8};
+
+    const std::vector<std::pair<std::string, std::string>> samples = {
+        {"alpha.txt", "abcdefghijklmnopqrstuvwxyz"},
+        {"beta.txt", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+        {"gamma.txt", "Concurrent jobs must preserve every byte."},
+        {"delta.txt", "A short file"}
+    };
+
+    for (std::size_t workers : workerCounts) {
+        // Repeat each configuration to catch intermittent issues.
+        for (int run = 0; run < 3; ++run) {
+            const fs::path inputDir =
+                workdir / ("workers_" + std::to_string(workers) +
+                           "_run_" + std::to_string(run));
+
+            fs::remove_all(inputDir);
+            fs::create_directories(inputDir);
+
+            for (const auto& sample : samples) {
+                writeTextFile(inputDir / sample.first, sample.second);
+            }
+
+            std::string error;
+            vault::chunking::FileChunker chunker(4);
+            vault::storage::LocalFileStorageAdapter storage;
+            vault::metadata::InMemoryMetadataStore metadata;
+
+            vault::manifest::VaultManifest encryptManifest;
+            assert(chunker.buildManifestForDirectory(
+                inputDir, vault::Action::Encrypt, encryptManifest, error));
+
+            encryptManifest.setAlgorithmId(engine.algorithmId());
+
+            vault::jobs::JobQueue encryptQueue;
+            encryptQueue.enqueueManifest(vault::Action::Encrypt, encryptManifest);
+
+            assert(encryptQueue.size() == encryptManifest.chunkCount());
+            assert(encryptQueue.executeAll(
+                engine, key, storage, metadata, encryptManifest, error, workers));
+
+            vault::manifest::VaultManifest decryptManifest;
+            assert(chunker.buildManifestForDirectory(
+                inputDir, vault::Action::Decrypt, decryptManifest, error));
+
+            decryptManifest.setAlgorithmId(engine.algorithmId());
+
+            vault::jobs::JobQueue decryptQueue;
+            decryptQueue.enqueueManifest(vault::Action::Decrypt, decryptManifest);
+
+            assert(decryptQueue.executeAll(
+                engine, key, storage, metadata, decryptManifest, error, workers));
+
+            for (const auto& sample : samples) {
+                assert(readTextFile(inputDir / sample.first) == sample.second);
+            }
+
+            fs::remove_all(inputDir);
+        }
+    }
+}
+
 
 } // namespace
 
@@ -108,11 +178,40 @@ int main() {
     assert(decryptQueue.executeAll(engine, key, storage, metadata, decryptManifest, error, 1));
     assert(readTextFile(sampleFile) == original);
 
+    testConcurrentRoundTrips(workdir / "concurrency", engine, key);
+
     assert(chunker.buildManifestForDirectory(inputDir, vault::Action::Encrypt, encryptManifest, error));
     encryptManifest.setAlgorithmId(engine.algorithmId());
     vault::jobs::JobQueue tamperEncryptQueue;
     tamperEncryptQueue.enqueueManifest(vault::Action::Encrypt, encryptManifest);
     assert(tamperEncryptQueue.executeAll(engine, key, storage, metadata, encryptManifest, error, 2));
+
+    
+    // Wrong-password test: encrypted input must remain unchanged.
+    const std::string encryptedBeforeWrongPassword =
+        readTextFile(sampleFile);
+
+    vault::crypto::CryptoKey wrongKey =
+        vault::crypto::CryptoKey::fromPassword("definitely the wrong password");
+
+    assert(chunker.buildManifestForDirectory(
+        inputDir, vault::Action::Decrypt, decryptManifest, error));
+    decryptManifest.setAlgorithmId(engine.algorithmId());
+
+    vault::jobs::JobQueue wrongPasswordQueue;
+    wrongPasswordQueue.enqueueManifest(
+        vault::Action::Decrypt, decryptManifest);
+
+    error.clear();
+
+    assert(!wrongPasswordQueue.executeAll(
+        engine, wrongKey, storage, metadata,
+        decryptManifest, error, 3));
+
+    assert(!error.empty());
+    assert(readTextFile(sampleFile) == encryptedBeforeWrongPassword);
+    assert(!fs::exists(sampleFile.string() + ".sdfv.tmp"));
+
 
     std::string tamperedFile = readTextFile(sampleFile);
     tamperedFile.back() ^= 0x01;
